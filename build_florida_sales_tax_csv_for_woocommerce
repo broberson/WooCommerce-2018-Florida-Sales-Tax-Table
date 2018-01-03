@@ -1,0 +1,178 @@
+#!/bin/bash
+
+# Requirements for Mac OS (using brew)
+#   brew install wget q poppler
+#
+# 'wget' fetches stuff off the web
+# 'q' magically treats text files like database tables and lets you query against them
+# 'poppler' provides the pdftotext utility which is pretty neat
+#
+# -- no, I don't know how to make this run for you under Windows.
+#
+
+
+# run this with a -d argument to prevent deleting intermediate files
+# (useful if something seems wonky with the final output)
+if [ "$1" == "-d" ]; then
+  DEBUG="true"
+fi
+
+# use GeoNames.org to get a list of ZipCodes by County for the state of Florida
+if [[ ! -f 1_COUNTIES_AND_ZIPCODES.txt ]]; then
+  wget -q http://download.geonames.org/export/zip/US.zip
+  unzip -q US.zip
+
+  # create a datafile with each county and a comma-delimited list of it's zipcodes
+  # limited to just counties in Florida
+  # ...and correct the spelling of St. John's County so it matches data from the Dept of Revenue
+  q -tOT "select c6 as County, group_concat(c2) as Zips from ./US.txt where c5='FL' group by County" \
+    | sed 's/Saint Johns/St. Johns/g' \
+    > 1_COUNTIES_AND_ZIPCODES.txt
+
+  # we're finished with the GeoNames files, so delete them
+  rm US.zip readme.txt > /dev/null 2>&1
+
+  if [ ! $DEBUG ]; then
+    rm US.txt > /dev/null 2>&1
+  fi
+fi
+
+
+# use the Florida Department of Revenue website to get a PDF with 2018 County Surtax Rates in it
+if [[ ! -f 2_DEPT_OF_REVENUE_SURTAX_DOCUMENT.txt ]]; then
+  # fetch the 2018 Florida discretionary sales surtax PDF from the Florida Dept of Revenue
+  wget -q http://floridarevenue.com/Forms_library/current/dr15dss_2018.pdf
+
+  # convert it to text as best we can; this is always dicey
+  pdftotext -layout -l 1 dr15dss_2018.pdf 2_DEPT_OF_REVENUE_SURTAX_DOCUMENT.txt
+
+  if [ ! $DEBUG ]; then
+    rm dr15dss_2018.pdf > /dev/null 2>&1
+  fi
+
+fi
+
+# build a usable table of Counties and Surtax Rates from the PDF data extracted
+if [[ ! -f 3_COUNTY_SURTAX_RATES.txt ]]; then
+  # find first line and last line of tabular county data
+  ALACHUA=$(awk '/Alachua/{ print NR; exit }' 2_DEPT_OF_REVENUE_SURTAX_DOCUMENT.txt)
+  WASHINGTON=$(awk '/Washington/{ print NR; exit }' 2_DEPT_OF_REVENUE_SURTAX_DOCUMENT.txt)
+  LAFAYETTE=$(awk '/Lafayette/{ print NR; exit }' 2_DEPT_OF_REVENUE_SURTAX_DOCUMENT.txt)
+
+  START=$ALACHUA
+  END=$WASHINGTON
+  if (( $WASHINGTON < $LAFAYETTE )); then
+    END=$LAFAYETTE
+  fi
+
+  # remove cruft before and after table and pull out columns by offset into a comma-separated format
+  # (the result is comma delimited, but spaces still pad everything - we'll trim that up later)
+  head -n"$END" 2_DEPT_OF_REVENUE_SURTAX_DOCUMENT.txt \
+    | tail -n +"$START" \
+    | awk -v OFS=',' '{print substr($0,1,15), substr($0,16,9), substr($0,70,15), substr($0,85,8)}' \
+    > tmp.txt
+
+  # data is in two side-by-side columns. extract columns 1 and 2, then append columns 3 and 4
+  # to get one record per row instead of two.
+  cat tmp.txt | cut -d, -f1,2 > tmp1.txt
+  cat tmp.txt | cut -d, -f3,4 >> tmp1.txt
+
+  # strip out all those spaces, remove blank rows, change None to 0%,
+  # clean trailing spaces, convert percents to numbers
+  cat tmp1.txt | sed 's/ *, */,/g' | egrep -v '^,' \
+    | sed 's/,None/,0%/g' | sed 's/ *$//g' \
+    | sed 's/,\(\[0-9\.\]+\)%/\1/g' > 3_COUNTY_SURTAX_RATES.txt
+
+  # delete temporary files
+  rm tmp.txt tmp1.txt
+
+  # convert to tab delimited with column headers
+  q -d, -OT "select c1 as County, c2 as TaxRate from ./3_COUNTY_SURTAX_RATES.txt" > tmp.txt
+  mv tmp.txt 3_COUNTY_SURTAX_RATES.txt
+
+  if [ ! $DEBUG ]; then
+    rm 2_DEPT_OF_REVENUE_SURTAX_DOCUMENT.txt > /dev/null 2>&1
+  fi
+
+fi
+
+
+# join TaxRate data and ZipCode data together on County to create a single file with
+# each County, it's 2018 tax rate, and a comma-separated list of zipcodes in that county
+# (note, we add in the base 6% Florida State sales tax in this step)
+if [[ ! -f 4_COUNTY_SURTAX_RATES_WITH_ZIPCODES.txt ]]; then
+QUERY=$(cat <<-END
+  select
+    c.County, (t.TaxRate + 6.00) as TaxRate, c.Zips
+  from ./1_COUNTIES_AND_ZIPCODES.txt as c
+    join ./3_COUNTY_SURTAX_RATES.txt as t
+      on c.County = t.County
+END
+)
+
+  q -tOH "$QUERY" > 4_COUNTY_SURTAX_RATES_WITH_ZIPCODES.txt
+
+  if [ ! $DEBUG ]; then
+    rm 1_COUNTIES_AND_ZIPCODES.txt 3_COUNTY_SURTAX_RATES.txt > /dev/null 2>&1
+  fi
+
+fi
+
+# group the above data by TaxRate to build a table of
+# surtax rates and the zipcodes where those rates apply
+# (and while we're at it, make all the columns WooCommerce
+# expects to see in an uploaded CSV file, sort by the
+# length of the zip codes field, since that's how Woo likes
+# to organize it, and give the tax rates 4 digits to the
+# right of the decimal)
+if [[ ! -f 5_GROUPED_FOR_WOOCOMMERCE.txt ]]; then
+QUERY=$(cat <<-END
+  select
+    '' as 'Country code',
+    'FL' as 'State code',
+    group_concat(Zips) as 'Postcode / ZIP',
+    '' as City,
+    printf("%.4f", TaxRate) as 'Rate %',
+    'Tax' as 'Tax name',
+    1 as Priority,
+    0 as Compound,
+    1 as Shipping,
+    '' as 'Tax class'
+  from ./4_COUNTY_SURTAX_RATES_WITH_ZIPCODES.txt
+  group by TaxRate
+  order by length(group_concat(Zips)) desc
+END
+)
+
+  q -tOHT "$QUERY" > 5_GROUPED_FOR_WOOCOMMERCE.txt
+
+  if [ ! $DEBUG ]; then
+    rm 4_COUNTY_SURTAX_RATES_WITH_ZIPCODES.txt > /dev/null 2>&1
+  fi
+fi
+
+# editors mess with tabs - this is cleaner than sticking
+# a literal tab character in that sed command below
+TAB=$'\t'
+
+# Final cleanup
+# 1) We need two entries for each zipcode, one with the 5-digit zipcode and one with
+#    an asterisk after it to match Zip+4 entries. Replacing each zipcode in the file
+#    with the two entries we want solves that problem
+# 2) We need the zipcodes separated with semicolons, not commas, so another replace for that
+# 3) We need a comma-delimited file, not Tab demlimited, so one final replace for that
+if [[ ! -f woocommerce_2018_fl_sales_tax_table.csv ]]; then
+  cat 5_GROUPED_FOR_WOOCOMMERCE.txt | sed 's/\([0-9]\{5\}\)/\1,\1*/g' \
+    | sed 's/,/; /g' | sed 's/'"${TAB}"'/,/g' \
+    > woocommerce_2018_fl_sales_tax_table.csv
+
+  # append a line to catch any zipcodes not matched by the above
+  # and apply a base 6% Florida State Sales Tax with no county surtax added in
+  echo ",FL,,,6.0000,Tax,1,0,1," >> woocommerce_2018_fl_sales_tax_table.csv
+
+  if [ ! $DEBUG ]; then
+    rm 5_GROUPED_FOR_WOOCOMMERCE.txt > /dev/null 2>&1
+  fi
+fi
+
+
