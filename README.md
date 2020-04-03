@@ -10,7 +10,7 @@ Retail businesses in Florida are required to collect 6% sales tax on non-exempt 
 
 In WooCommerce Settings, on the Tax tab, under Standard Rates, you can enter all of the various tax rates you want to apply, but that's terribly boring. The "Import CSV" button in the corner, however, is nice. This repository contains just the sort of CSV file that button likes.
 
-This repository also contains the shell script used to download the necessary data, combine it, and produce that CSV file. It's not a great example of bash-scripting-fu, but it works on my machine. (Mac OS X Sierra).
+This repository also contains the shell script used to download the necessary data, combine it, and produce that CSV file. It's not a great example of bash-scripting-fu, but it works on my machine. (macOS 10.15.4 - Catalina).
 
 **Pre-requisites**:
 
