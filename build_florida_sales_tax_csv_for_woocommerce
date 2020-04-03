@@ -1,5 +1,8 @@
 #!/bin/bash
 
+YEAR=2020
+PDF=https://floridarevenue.com/Documents/dr15DSS_%20r11_19.pdf
+
 # Requirements for Mac OS (using brew)
 #   brew install wget q poppler
 #
@@ -9,7 +12,6 @@
 #
 # -- no, I don't know how to make this run for you under Windows.
 #
-
 
 # run this with a -d argument to prevent deleting intermediate files
 # (useful if something seems wonky with the final output)
@@ -38,16 +40,16 @@ if [[ ! -f 1_COUNTIES_AND_ZIPCODES.txt ]]; then
 fi
 
 
-# use the Florida Department of Revenue website to get a PDF with 2018 County Surtax Rates in it
+# use the Florida Department of Revenue website to get a PDF with County Surtax Rates in it
 if [[ ! -f 2_DEPT_OF_REVENUE_SURTAX_DOCUMENT.txt ]]; then
-  # fetch the 2018 Florida discretionary sales surtax PDF from the Florida Dept of Revenue
-  wget -q http://floridarevenue.com/Forms_library/current/dr15dss_2018.pdf
+  # fetch the Florida discretionary sales surtax PDF from the Florida Dept of Revenue for the selected year
+  wget -q "$PDF" -O surtax.pdf
 
   # convert it to text as best we can; this is always dicey
-  pdftotext -layout -l 1 dr15dss_2018.pdf 2_DEPT_OF_REVENUE_SURTAX_DOCUMENT.txt
+  pdftotext -layout -l 1 surtax.pdf 2_DEPT_OF_REVENUE_SURTAX_DOCUMENT.txt
 
   if [ ! $DEBUG ]; then
-    rm dr15dss_2018.pdf > /dev/null 2>&1
+    rm surtax.pdf > /dev/null 2>&1
   fi
 
 fi
@@ -69,7 +71,7 @@ if [[ ! -f 3_COUNTY_SURTAX_RATES.txt ]]; then
   # (the result is comma delimited, but spaces still pad everything - we'll trim that up later)
   head -n"$END" 2_DEPT_OF_REVENUE_SURTAX_DOCUMENT.txt \
     | tail -n +"$START" \
-    | awk -v OFS=',' '{print substr($0,1,15), substr($0,16,9), substr($0,70,15), substr($0,85,8)}' \
+    | awk -v OFS=',' '{print substr($0,1,15), substr($0,16,9), substr($0,68,15), substr($0,83,8)}' \
     > tmp.txt
 
   # data is in two side-by-side columns. extract columns 1 and 2, then append columns 3 and 4
@@ -161,14 +163,14 @@ TAB=$'\t'
 #    with the two entries we want solves that problem
 # 2) We need the zipcodes separated with semicolons, not commas, so another replace for that
 # 3) We need a comma-delimited file, not Tab demlimited, so one final replace for that
-if [[ ! -f woocommerce_2018_fl_sales_tax_table.csv ]]; then
+if [[ ! -f woocommerce_fl_sales_tax_table_$YEAR.csv ]]; then
   cat 5_GROUPED_FOR_WOOCOMMERCE.txt | sed 's/\([0-9]\{5\}\)/\1,\1*/g' \
     | sed 's/,/; /g' | sed 's/'"${TAB}"'/,/g' \
-    > woocommerce_2018_fl_sales_tax_table.csv
+    > woocommerce_fl_sales_tax_table_$YEAR.csv
 
   # append a line to catch any zipcodes not matched by the above
   # and apply a base 6% Florida State Sales Tax with no county surtax added in
-  echo ",FL,,,6.0000,Tax,1,0,1," >> woocommerce_2018_fl_sales_tax_table.csv
+  echo ",FL,,,6.0000,Tax,1,0,1," >> woocommerce_fl_sales_tax_table_$YEAR.csv
 
   if [ ! $DEBUG ]; then
     rm 5_GROUPED_FOR_WOOCOMMERCE.txt > /dev/null 2>&1
