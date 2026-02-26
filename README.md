@@ -1,4 +1,10 @@
-# WooCommerce 2020 Florida Sales Tax Table
+# This solution is no longer necessary, use the WooCommerce Tax plugin instead.
+
+(thanks @baizmandesign)
+
+---
+
+## WooCommerce 2020 Florida Sales Tax Table
 
 #### 2020 Florida Sales Tax Rates Importable CSV for WooCommerce
 
